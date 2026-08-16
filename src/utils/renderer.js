@@ -49,6 +49,22 @@ const storage = {
     async setApiKey(apiKey) {
         return ipcRenderer.invoke('storage:set-api-key', apiKey);
     },
+    async getGeminiKeys() {
+        const result = await ipcRenderer.invoke('storage:get-gemini-keys');
+        return result.success ? result.data : { keys: [], activeIndex: 0 };
+    },
+    async setGeminiKeys(keys) {
+        const result = await ipcRenderer.invoke('storage:set-gemini-keys', keys);
+        return result.success ? result.data : { keys: [], activeIndex: 0 };
+    },
+    async setActiveKeyIndex(index) {
+        const result = await ipcRenderer.invoke('storage:set-active-key-index', index);
+        return result.success ? result.data : { keys: [], activeIndex: 0 };
+    },
+    async cycleActiveKey() {
+        const result = await ipcRenderer.invoke('storage:cycle-active-key');
+        return result.success ? result.data : { keys: [], activeIndex: 0 };
+    },
     async getGroqApiKey() {
         const result = await ipcRenderer.invoke('storage:get-groq-api-key');
         return result.success ? result.data : '';

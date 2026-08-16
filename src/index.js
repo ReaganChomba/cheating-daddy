@@ -119,6 +119,45 @@ function setupStorageIpcHandlers() {
         }
     });
 
+    ipcMain.handle('storage:get-gemini-keys', async () => {
+        try {
+            return { success: true, data: { keys: storage.getGeminiKeys(), activeIndex: storage.getActiveKeyIndex() } };
+        } catch (error) {
+            console.error('Error getting Gemini keys:', error);
+            return { success: false, error: error.message };
+        }
+    });
+
+    ipcMain.handle('storage:set-gemini-keys', async (event, keys) => {
+        try {
+            storage.setGeminiKeys(keys);
+            return { success: true, data: { keys: storage.getGeminiKeys(), activeIndex: storage.getActiveKeyIndex() } };
+        } catch (error) {
+            console.error('Error setting Gemini keys:', error);
+            return { success: false, error: error.message };
+        }
+    });
+
+    ipcMain.handle('storage:set-active-key-index', async (event, index) => {
+        try {
+            storage.setActiveKeyIndex(index);
+            return { success: true, data: { keys: storage.getGeminiKeys(), activeIndex: storage.getActiveKeyIndex() } };
+        } catch (error) {
+            console.error('Error setting active Gemini key:', error);
+            return { success: false, error: error.message };
+        }
+    });
+
+    ipcMain.handle('storage:cycle-active-key', async () => {
+        try {
+            storage.cycleActiveKey();
+            return { success: true, data: { keys: storage.getGeminiKeys(), activeIndex: storage.getActiveKeyIndex() } };
+        } catch (error) {
+            console.error('Error cycling Gemini key:', error);
+            return { success: false, error: error.message };
+        }
+    });
+
     ipcMain.handle('storage:get-groq-api-key', async () => {
         try {
             return { success: true, data: storage.getGroqApiKey() };

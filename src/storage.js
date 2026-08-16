@@ -18,6 +18,8 @@ const DEFAULT_CONFIG = {
 const DEFAULT_CREDENTIALS = {
     apiKey: '',
     groqApiKey: '',
+    geminiKeys: [],
+    activeKeyIndex: 0,
 };
 
 const DEFAULT_PREFERENCES = {
@@ -193,12 +195,77 @@ function setCredentials(credentials) {
     return writeJsonFile(getCredentialsPath(), updated);
 }
 
+// Free-tier Gemini keys exhaust their daily quota quickly, so several can be
+// stored at once and switched between. `apiKey` always mirrors the active slot,
+// which keeps every existing consumer of getApiKey() working unchanged.
+function getGeminiKeys() {
+    const credentials = getCredentials();
+    const slots = Array.isArray(credentials.geminiKeys) ? credentials.geminiKeys.filter(slot => slot && typeof slot.key === 'string') : [];
+
+    // Migrate a pre-slots single key into the first slot
+    if (slots.length === 0 && credentials.apiKey) {
+        return [{ label: 'Key 1', key: credentials.apiKey }];
+    }
+
+    return slots;
+}
+
+function getActiveKeyIndex() {
+    const slots = getGeminiKeys();
+    if (slots.length === 0) return 0;
+
+    const index = getCredentials().activeKeyIndex;
+    return Number.isInteger(index) && index >= 0 && index < slots.length ? index : 0;
+}
+
+function setGeminiKeys(keys) {
+    const slots = (Array.isArray(keys) ? keys : []).map((slot, i) => ({
+        label: (slot && slot.label) || `Key ${i + 1}`,
+        key: (slot && slot.key) || '',
+    }));
+    const index = slots.length === 0 ? 0 : Math.min(getActiveKeyIndex(), slots.length - 1);
+
+    return setCredentials({
+        geminiKeys: slots,
+        activeKeyIndex: index,
+        apiKey: slots[index] ? slots[index].key : '',
+    });
+}
+
+function setActiveKeyIndex(index) {
+    const slots = getGeminiKeys();
+    if (slots.length === 0) return false;
+
+    const active = Number.isInteger(index) && index >= 0 && index < slots.length ? index : 0;
+    return setCredentials({ geminiKeys: slots, activeKeyIndex: active, apiKey: slots[active].key });
+}
+
+function cycleActiveKey() {
+    const slots = getGeminiKeys();
+    if (slots.length < 2) return getActiveKeyIndex();
+
+    const next = (getActiveKeyIndex() + 1) % slots.length;
+    setActiveKeyIndex(next);
+    return next;
+}
+
 function getApiKey() {
+    const slots = getGeminiKeys();
+    const active = slots[getActiveKeyIndex()];
+    if (active && active.key) return active.key;
+
     return getCredentials().apiKey || '';
 }
 
 function setApiKey(apiKey) {
-    return setCredentials({ apiKey });
+    const slots = getGeminiKeys();
+    if (slots.length === 0) {
+        return setCredentials({ geminiKeys: [{ label: 'Key 1', key: apiKey }], activeKeyIndex: 0, apiKey });
+    }
+
+    const index = getActiveKeyIndex();
+    slots[index] = { ...slots[index], key: apiKey };
+    return setCredentials({ geminiKeys: slots, activeKeyIndex: index, apiKey });
 }
 
 function getGroqApiKey() {
@@ -511,6 +578,11 @@ module.exports = {
     setCredentials,
     getApiKey,
     setApiKey,
+    getGeminiKeys,
+    setGeminiKeys,
+    getActiveKeyIndex,
+    setActiveKeyIndex,
+    cycleActiveKey,
     getGroqApiKey,
     setGroqApiKey,
 

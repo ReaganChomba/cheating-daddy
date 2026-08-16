@@ -296,6 +296,42 @@ export class MainView extends LitElement {
             text-decoration: underline;
         }
 
+        .key-switcher {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-bottom: 8px;
+        }
+
+        .key-chip {
+            font-size: var(--font-size-xs);
+            color: var(--text-muted);
+            background: transparent;
+            border: 1px solid var(--border-color, rgba(255, 255, 255, 0.12));
+            border-radius: 999px;
+            padding: 3px 10px;
+            cursor: pointer;
+        }
+
+        .key-chip:hover {
+            color: var(--text-color, #fff);
+        }
+
+        .key-chip.active {
+            color: var(--accent);
+            border-color: var(--accent);
+        }
+
+        .key-chip.empty {
+            opacity: 0.55;
+        }
+
+        .key-hint-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
         .whisper-label-row {
             display: flex;
             align-items: center;
@@ -696,6 +732,8 @@ export class MainView extends LitElement {
         _mode: { state: true },
         _token: { state: true },
         _geminiKey: { state: true },
+        _geminiKeys: { state: true },
+        _activeKeyIndex: { state: true },
         _groqKey: { state: true },
         _openaiKey: { state: true },
         _geminiLiveModel: { state: true },
@@ -725,6 +763,8 @@ export class MainView extends LitElement {
         this._mode = 'byok';
         this._token = '';
         this._geminiKey = '';
+        this._geminiKeys = [];
+        this._activeKeyIndex = 0;
         this._groqKey = '';
         this._openaiKey = '';
         this._geminiLiveModel = 'gemini-3.1-flash-live-preview';
@@ -765,6 +805,11 @@ export class MainView extends LitElement {
             // Load keys
             this._token = creds.cloudToken || '';
             this._geminiKey = (await cheatingDaddy.storage.getApiKey().catch(() => '')) || '';
+
+            const geminiKeys = await cheatingDaddy.storage.getGeminiKeys().catch(() => ({ keys: [], activeIndex: 0 }));
+            this._geminiKeys = geminiKeys.keys || [];
+            this._activeKeyIndex = geminiKeys.activeIndex || 0;
+
             this._groqKey = (await cheatingDaddy.storage.getGroqApiKey().catch(() => '')) || '';
             this._openaiKey = creds.openaiKey || '';
             this._geminiLiveModel = config.geminiLiveModel || 'gemini-3.1-flash-live-preview';
@@ -937,6 +982,40 @@ export class MainView extends LitElement {
         this._keyError = false;
         await cheatingDaddy.storage.setApiKey(val);
         this.requestUpdate();
+    }
+
+    _applyKeyState(state) {
+        this._geminiKeys = state.keys || [];
+        this._activeKeyIndex = state.activeIndex || 0;
+        const active = this._geminiKeys[this._activeKeyIndex];
+        this._geminiKey = active ? active.key : '';
+        this._keyError = false;
+        this.requestUpdate();
+    }
+
+    async _saveGeminiKeySlot(index, val) {
+        const slots = this._geminiKeys.map((slot, i) => (i === index ? { ...slot, key: val } : slot));
+        this._applyKeyState(await cheatingDaddy.storage.setGeminiKeys(slots));
+    }
+
+    async _saveGeminiKeyLabel(index, val) {
+        const slots = this._geminiKeys.map((slot, i) => (i === index ? { ...slot, label: val } : slot));
+        this._applyKeyState(await cheatingDaddy.storage.setGeminiKeys(slots));
+    }
+
+    async _addGeminiKey() {
+        const slots = [...this._geminiKeys, { label: `Key ${this._geminiKeys.length + 1}`, key: '' }];
+        const state = await cheatingDaddy.storage.setGeminiKeys(slots);
+        this._applyKeyState(await cheatingDaddy.storage.setActiveKeyIndex(state.keys.length - 1));
+    }
+
+    async _removeGeminiKey(index) {
+        const slots = this._geminiKeys.filter((_, i) => i !== index);
+        this._applyKeyState(await cheatingDaddy.storage.setGeminiKeys(slots));
+    }
+
+    async _selectGeminiKey(index) {
+        this._applyKeyState(await cheatingDaddy.storage.setActiveKeyIndex(index));
     }
 
     async _saveGroqKey(val) {
@@ -1169,16 +1248,53 @@ export class MainView extends LitElement {
                 <div class="config-content">
                     <div class="form-group">
                         <label class="form-label">Gemini API Key</label>
+                        ${this._geminiKeys.length > 1
+                            ? html`
+                                  <div class="key-switcher">
+                                      ${this._geminiKeys.map(
+                                          (slot, i) => html`
+                                              <button
+                                                  class="key-chip ${i === this._activeKeyIndex ? 'active' : ''} ${slot.key ? '' : 'empty'}"
+                                                  title=${slot.key ? 'Use this key' : 'Empty slot'}
+                                                  @click=${() => this._selectGeminiKey(i)}
+                                              >
+                                                  ${slot.label || `Key ${i + 1}`}
+                                              </button>
+                                          `
+                                      )}
+                                  </div>
+                              `
+                            : ''}
                         <input
                             type="password"
                             placeholder="Required"
                             .value=${this._geminiKey}
-                            @input=${e => this._saveGeminiKey(e.target.value)}
+                            @input=${e =>
+                                this._geminiKeys.length
+                                    ? this._saveGeminiKeySlot(this._activeKeyIndex, e.target.value)
+                                    : this._saveGeminiKey(e.target.value)}
                             class=${this._keyError ? 'error' : ''}
                         />
-                        <div class="form-hint">
+                        ${this._geminiKeys.length > 1
+                            ? html`
+                                  <input
+                                      type="text"
+                                      placeholder="Name this key"
+                                      .value=${(this._geminiKeys[this._activeKeyIndex] || {}).label || ''}
+                                      @input=${e => this._saveGeminiKeyLabel(this._activeKeyIndex, e.target.value)}
+                                  />
+                              `
+                            : ''}
+                        <div class="form-hint key-hint-row">
                             <span class="link" @click=${() => this.onExternalLink('https://aistudio.google.com/apikey')}>Get Gemini key</span>
+                            <span class="link" @click=${() => this._addGeminiKey()}>Add another key</span>
+                            ${this._geminiKeys.length > 1
+                                ? html`<span class="link" @click=${() => this._removeGeminiKey(this._activeKeyIndex)}>Remove this key</span>`
+                                : ''}
                         </div>
+                        ${this._geminiKeys.length > 1
+                            ? html`<div class="form-hint">Switching keys applies to Analyze Screen immediately; restart the session for live audio.</div>`
+                            : ''}
                     </div>
 
                     <div class="form-group">

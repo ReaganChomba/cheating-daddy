@@ -216,6 +216,31 @@ export class AssistantView extends LitElement {
             background: var(--bg-app);
         }
 
+        .key-toggle-btn {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-shrink: 0;
+            font-size: var(--font-size-xs);
+            color: var(--text-secondary, rgba(255, 255, 255, 0.7));
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            border-radius: 100px;
+            padding: 6px 12px;
+            cursor: pointer;
+        }
+
+        .key-toggle-btn:hover {
+            color: var(--text-color, #fff);
+        }
+
+        .key-toggle-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--accent, #4ade80);
+        }
+
         .input-bar-inner {
             display: flex;
             align-items: center;
@@ -307,6 +332,8 @@ export class AssistantView extends LitElement {
         onSendText: { type: Function },
         shouldAnimateResponse: { type: Boolean },
         isAnalyzing: { type: Boolean, state: true },
+        _keySlots: { state: true },
+        _activeKeyIndex: { state: true },
     };
 
     constructor() {
@@ -316,6 +343,8 @@ export class AssistantView extends LitElement {
         this.selectedProfile = 'interview';
         this.onSendText = () => {};
         this.isAnalyzing = false;
+        this._keySlots = [];
+        this._activeKeyIndex = 0;
         this._animFrame = null;
     }
 
@@ -426,6 +455,7 @@ export class AssistantView extends LitElement {
 
     connectedCallback() {
         super.connectedCallback();
+        this._loadKeySlots();
 
         if (window.require) {
             const { ipcRenderer } = window.require('electron');
@@ -469,6 +499,22 @@ export class AssistantView extends LitElement {
             e.preventDefault();
             this.handleSendText();
         }
+    }
+
+    async _loadKeySlots() {
+        if (!window.cheatingDaddy?.storage?.getGeminiKeys) return;
+        const state = await window.cheatingDaddy.storage.getGeminiKeys().catch(() => null);
+        if (!state) return;
+        this._keySlots = state.keys || [];
+        this._activeKeyIndex = state.activeIndex || 0;
+    }
+
+    async _cycleKey() {
+        if (this._keySlots.length < 2) return;
+        const state = await window.cheatingDaddy.storage.cycleActiveKey().catch(() => null);
+        if (!state) return;
+        this._keySlots = state.keys || [];
+        this._activeKeyIndex = state.activeIndex || 0;
     }
 
     async handleScreenAnswer() {
@@ -695,6 +741,18 @@ export class AssistantView extends LitElement {
                         @keydown=${this.handleTextKeydown}
                     />
                 </div>
+                ${this._keySlots.length > 1
+                    ? html`
+                          <button
+                              class="key-toggle-btn"
+                              title="Active Gemini key — click to switch"
+                              @click=${this._cycleKey}
+                          >
+                              <span class="key-toggle-dot"></span>
+                              ${(this._keySlots[this._activeKeyIndex] || {}).label || `Key ${this._activeKeyIndex + 1}`}
+                          </button>
+                      `
+                    : ''}
                 <button class="analyze-btn ${this.isAnalyzing ? 'analyzing' : ''}" @click=${this.handleScreenAnswer}>
                     <canvas class="analyze-canvas"></canvas>
                     <span class="analyze-btn-content">
