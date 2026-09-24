@@ -771,9 +771,9 @@ export class MainView extends LitElement {
         this._groqKeys = [];
         this._activeGroqKeyIndex = 0;
         this._openaiKey = '';
-        this._geminiLiveModel = 'gemini-3.1-flash-live-preview';
-        this._groqModel = 'qwen/qwen3.6-27b';
-        this._groqImageModel = 'qwen/qwen3.6-27b';
+        this._geminiLiveModel = 'gemini-3.8-live';
+        this._groqModel = 'openai/gpt-oss-20b';
+        this._groqImageModel = 'qwen/qwen3.8-27b';
         this._disableGroqThinking = true;
         this._tokenError = false;
         this._keyError = false;
@@ -820,9 +820,13 @@ export class MainView extends LitElement {
             const activeGroqKey = this._groqKeys[this._activeGroqKeyIndex];
             this._groqKey = activeGroqKey ? activeGroqKey.key : ((await cheatingDaddy.storage.getGroqApiKey().catch(() => '')) || '');
             this._openaiKey = creds.openaiKey || '';
-            this._geminiLiveModel = config.geminiLiveModel || 'gemini-3.1-flash-live-preview';
-            this._groqModel = config.groqModel || 'qwen/qwen3.6-27b';
-            this._groqImageModel = config.groqImageModel || 'qwen/qwen3.6-27b';
+            this._geminiLiveModel = config.geminiLiveModel === 'gemini-3.1-flash-live-preview'
+                ? 'gemini-3.8-live'
+                : (config.geminiLiveModel || 'gemini-3.8-live');
+            this._groqModel = config.groqModel === 'qwen/qwen3.6-27b'
+                ? 'openai/gpt-oss-20b'
+                : (config.groqModel || 'openai/gpt-oss-20b');
+            this._groqImageModel = config.groqImageModel || 'qwen/qwen3.8-27b';
             this._disableGroqThinking = config.disableGroqThinking === true;
 
             // Load local AI settings
