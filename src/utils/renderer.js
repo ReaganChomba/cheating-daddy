@@ -72,6 +72,22 @@ const storage = {
     async setGroqApiKey(groqApiKey) {
         return ipcRenderer.invoke('storage:set-groq-api-key', groqApiKey);
     },
+    async getGroqKeys() {
+        const result = await ipcRenderer.invoke('storage:get-groq-keys');
+        return result.success ? result.data : { keys: [], activeIndex: 0 };
+    },
+    async setGroqKeys(keys) {
+        const result = await ipcRenderer.invoke('storage:set-groq-keys', keys);
+        return result.success ? result.data : { keys: [], activeIndex: 0 };
+    },
+    async setActiveGroqKeyIndex(index) {
+        const result = await ipcRenderer.invoke('storage:set-active-groq-key-index', index);
+        return result.success ? result.data : { keys: [], activeIndex: 0 };
+    },
+    async cycleActiveGroqKey() {
+        const result = await ipcRenderer.invoke('storage:cycle-active-groq-key');
+        return result.success ? result.data : { keys: [], activeIndex: 0 };
+    },
 
     // Preferences
     async getPreferences() {

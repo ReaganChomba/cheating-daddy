@@ -177,6 +177,45 @@ function setupStorageIpcHandlers() {
         }
     });
 
+    ipcMain.handle('storage:get-groq-keys', async () => {
+        try {
+            return { success: true, data: { keys: storage.getGroqKeys(), activeIndex: storage.getActiveGroqKeyIndex() } };
+        } catch (error) {
+            console.error('Error getting Groq keys:', error);
+            return { success: false, error: error.message };
+        }
+    });
+
+    ipcMain.handle('storage:set-groq-keys', async (event, keys) => {
+        try {
+            storage.setGroqKeys(keys);
+            return { success: true, data: { keys: storage.getGroqKeys(), activeIndex: storage.getActiveGroqKeyIndex() } };
+        } catch (error) {
+            console.error('Error setting Groq keys:', error);
+            return { success: false, error: error.message };
+        }
+    });
+
+    ipcMain.handle('storage:set-active-groq-key-index', async (event, index) => {
+        try {
+            storage.setActiveGroqKeyIndex(index);
+            return { success: true, data: { keys: storage.getGroqKeys(), activeIndex: storage.getActiveGroqKeyIndex() } };
+        } catch (error) {
+            console.error('Error setting active Groq key:', error);
+            return { success: false, error: error.message };
+        }
+    });
+
+    ipcMain.handle('storage:cycle-active-groq-key', async () => {
+        try {
+            storage.cycleActiveGroqKey();
+            return { success: true, data: { keys: storage.getGroqKeys(), activeIndex: storage.getActiveGroqKeyIndex() } };
+        } catch (error) {
+            console.error('Error cycling Groq key:', error);
+            return { success: false, error: error.message };
+        }
+    });
+
     // ============ PREFERENCES ============
     ipcMain.handle('storage:get-preferences', async () => {
         try {

@@ -3,16 +3,7 @@ const { BrowserWindow, ipcMain } = require('electron');
 const { spawn } = require('child_process');
 const { saveDebugAudio } = require('../audioUtils');
 const { getSystemPrompt } = require('./prompts');
-const {
-    getAvailableModel,
-    incrementLimitCount,
-    getApiKey,
-    getGroqApiKey,
-    incrementCharUsage,
-    getConfig,
-    getGeminiKeys,
-    cycleActiveKey,
-} = require('../storage');
+const { getAvailableModel, incrementLimitCount, getApiKey, getGroqApiKey, getGroqKeys, getActiveGroqKeyIndex, setActiveGroqKeyIndex, incrementCharUsage, getConfig } = require('../storage');
 const { connectCloud, sendCloudAudio, sendCloudText, sendCloudImage, closeCloud, isCloudActive, setOnTurnComplete } = require('./cloud');
 const { startTransportLog, logTransportEvent, closeTransportLog } = require('./transportLogger');
 
@@ -220,6 +211,27 @@ function hasGroqKey() {
     return key && key.trim() != '';
 }
 
+function getGroqKeyCandidates() {
+    const slots = getGroqKeys().filter(slot => slot.key && slot.key.trim());
+    if (slots.length === 0) return [];
+
+    const activeIndex = getActiveGroqKeyIndex();
+    const ordered = [];
+    const active = slots[activeIndex];
+    if (active) ordered.push({ slotIndex: activeIndex, key: active.key });
+
+    slots.forEach((slot, index) => {
+        if (index !== activeIndex) ordered.push({ slotIndex: index, key: slot.key });
+    });
+    return ordered;
+}
+
+const GROQ_ROTATE_STATUSES = new Set([401, 403, 429]);
+
+function isGroqKeyRotationStatus(status) {
+    return GROQ_ROTATE_STATUSES.has(status);
+}
+
 function sendFinalTranscriptionToGroq() {
     if (!hasGroqKey() || groqRequestStartedForTurn) {
         return;
@@ -282,8 +294,7 @@ function getGroqReasoningOptions(model, disableThinking) {
 }
 
 async function sendToGroq(transcription) {
-    const groqApiKey = getGroqApiKey();
-    if (!groqApiKey) {
+    if (!hasGroqKey()) {
         console.log('No Groq API key configured, skipping Groq response');
         return;
     }
@@ -312,31 +323,58 @@ async function sendToGroq(transcription) {
     }
 
     try {
-        const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-                Authorization: `Bearer ${groqApiKey}`,
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                model: modelToUse,
-                messages: [{ role: 'system', content: currentSystemPrompt || 'You are a helpful assistant.' }, ...groqConversationHistory],
-                stream: true,
-                temperature: 0.7,
-                max_completion_tokens: GROQ_MAX_COMPLETION_TOKENS,
-                ...getGroqReasoningOptions(modelToUse, config.disableGroqThinking),
-            }),
-        });
+        const candidates = getGroqKeyCandidates();
+        let response = null;
+        let selectedSlotIndex = getActiveGroqKeyIndex();
 
-        if (!response.ok) {
+        for (const candidate of candidates) {
+            selectedSlotIndex = candidate.slotIndex;
+            response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                    Authorization: `Bearer ${candidate.key}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    model: modelToUse,
+                    messages: [{ role: 'system', content: currentSystemPrompt || 'You are a helpful assistant.' }, ...groqConversationHistory],
+                    stream: true,
+                    temperature: 0.7,
+                    max_completion_tokens: GROQ_MAX_COMPLETION_TOKENS,
+                    ...getGroqReasoningOptions(modelToUse, config.disableGroqThinking),
+                }),
+            });
+
+            if (response.ok) break;
+
             const errorText = await response.text();
             console.error('Groq API error:', response.status, errorText);
             logTransportEvent('groq.text.http_error', {
                 status: response.status,
                 body: errorText,
+                keySlot: selectedSlotIndex,
             });
-            sendToRenderer('update-status', `Groq error: ${response.status}`);
+
+            if (!isGroqKeyRotationStatus(response.status)) {
+                sendToRenderer('update-status', `Groq error: ${response.status}`);
+                return;
+            }
+
+            if (candidates.length > 1) {
+                console.warn(`Groq key slot ${selectedSlotIndex + 1} failed with ${response.status}; trying next key`);
+                sendToRenderer('update-status', `Groq key ${selectedSlotIndex + 1} unavailable; trying another key...`);
+            }
+        }
+
+        if (!response || !response.ok) {
+            const status = response ? response.status : 'unknown';
+            sendToRenderer('update-status', `All Groq keys failed (${status})`);
             return;
+        }
+
+        if (selectedSlotIndex !== getActiveGroqKeyIndex()) {
+            setActiveGroqKeyIndex(selectedSlotIndex);
+            sendToRenderer('update-status', `Groq switched to key ${selectedSlotIndex + 1}`);
         }
 
         logTransportEvent('groq.text.http_response', {
@@ -431,7 +469,9 @@ async function sendToGroq(transcription) {
 }
 
 async function sendImageToGroq(base64Data, prompt) {
-    const groqApiKey = getGroqApiKey();
+    if (!hasGroqKey()) {
+        return { success: false, error: 'No Groq API key configured' };
+    }
     const config = getConfig();
     const model = config.groqImageModel;
 
@@ -442,44 +482,64 @@ async function sendImageToGroq(base64Data, prompt) {
     });
 
     try {
-        const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-                Authorization: `Bearer ${groqApiKey}`,
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                model,
-                messages: [
-                    { role: 'system', content: currentSystemPrompt || 'You are a helpful assistant.' },
-                    {
-                        role: 'user',
-                        content: [
-                            { type: 'text', text: prompt },
-                            {
-                                type: 'image_url',
-                                image_url: {
-                                    url: `data:image/jpeg;base64,${base64Data}`,
-                                },
-                            },
-                        ],
-                    },
-                ],
-                stream: true,
-                temperature: 0.7,
-                max_completion_tokens: GROQ_MAX_COMPLETION_TOKENS,
-                ...getGroqReasoningOptions(model, config.disableGroqThinking),
-            }),
-        });
+        const candidates = getGroqKeyCandidates();
+        let response = null;
+        let selectedSlotIndex = getActiveGroqKeyIndex();
 
-        if (!response.ok) {
+        for (const candidate of candidates) {
+            selectedSlotIndex = candidate.slotIndex;
+            response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                    Authorization: `Bearer ${candidate.key}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    model,
+                    messages: [
+                        { role: 'system', content: currentSystemPrompt || 'You are a helpful assistant.' },
+                        {
+                            role: 'user',
+                            content: [
+                                { type: 'text', text: prompt },
+                                {
+                                    type: 'image_url',
+                                    image_url: {
+                                        url: `data:image/jpeg;base64,${base64Data}`,
+                                    },
+                                },
+                            ],
+                        },
+                    ],
+                    stream: true,
+                    temperature: 0.7,
+                    max_completion_tokens: GROQ_MAX_COMPLETION_TOKENS,
+                    ...getGroqReasoningOptions(model, config.disableGroqThinking),
+                }),
+            });
+
+            if (response.ok) break;
+
             const errorText = await response.text();
             console.error('Groq image API error:', response.status, errorText);
             logTransportEvent('groq.image.http_error', {
                 status: response.status,
                 body: errorText,
+                keySlot: selectedSlotIndex,
             });
-            return { success: false, error: `Groq error: ${response.status}` };
+
+            if (!isGroqKeyRotationStatus(response.status)) {
+                return { success: false, error: `Groq error: ${response.status}` };
+            }
+        }
+
+        if (!response || !response.ok) {
+            const status = response ? response.status : 'unknown';
+            return { success: false, error: `All Groq keys failed (${status})` };
+        }
+
+        if (selectedSlotIndex !== getActiveGroqKeyIndex()) {
+            setActiveGroqKeyIndex(selectedSlotIndex);
         }
 
         logTransportEvent('groq.image.http_response', {
@@ -1002,111 +1062,60 @@ async function sendAudioToGemini(base64Data, geminiSessionRef) {
     }
 }
 
-// Tried in order when the preferred model can't serve the request. The newest
-// model is the one that gets overloaded (503) on free tiers, while the older
-// ones keep answering, so falling back beats failing the request.
-const IMAGE_MODEL_FALLBACKS = ['gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite'];
-
-function getErrorStatus(error) {
-    return error?.status ?? error?.code ?? error?.response?.status;
-}
-
-function isQuotaError(error) {
-    return getErrorStatus(error) === 429 || /exceeded your current quota|resource_exhausted/i.test(String(error?.message || ''));
-}
-
-// 503 (overloaded), 500 (transient) and quota all mean "ask someone else"
-function isRetryableModelError(error) {
-    const status = getErrorStatus(error);
-    if (status === 503 || status === 500 || status === 429) return true;
-
-    return /unavailable|overloaded|high demand|internal error|not found for API version/i.test(String(error?.message || ''));
-}
-
 async function sendImageToGeminiHttp(base64Data, prompt) {
-    if (!getApiKey()) {
+    // Get available model based on rate limits
+    const model = getAvailableModel();
+
+    const apiKey = getApiKey();
+    if (!apiKey) {
         return { success: false, error: 'No API key configured' };
     }
 
-    const contents = [
-        {
-            inlineData: {
-                mimeType: 'image/jpeg',
-                data: base64Data,
+    try {
+        const ai = new GoogleGenAI({ apiKey: apiKey });
+
+        const contents = [
+            {
+                inlineData: {
+                    mimeType: 'image/jpeg',
+                    data: base64Data,
+                },
             },
-        },
-        { text: prompt },
-    ];
+            { text: prompt },
+        ];
 
-    // Start from the rate-limit-aware pick, then walk the rest of the chain
-    const preferred = getAvailableModel();
-    const models = [preferred, ...IMAGE_MODEL_FALLBACKS.filter(model => model !== preferred)];
-    // Key rotation only applies when multiple keys are stored
-    const keyCount = Math.max((typeof getGeminiKeys === 'function' ? getGeminiKeys() : []).length, 1);
+        console.log(`Sending image to ${model} (streaming)...`);
+        const response = await ai.models.generateContentStream({
+            model: model,
+            contents: contents,
+        });
 
-    let lastError = 'Unknown error';
-    let hasStreamedText = false;
+        // Increment count after successful call
+        incrementLimitCount(model);
 
-    for (let keyAttempt = 0; keyAttempt < keyCount; keyAttempt++) {
-        const ai = new GoogleGenAI({ apiKey: getApiKey() });
-        let sawQuotaError = false;
-
-        for (const model of models) {
-            try {
-                console.log(`Sending image to ${model} (streaming)...`);
-                const response = await ai.models.generateContentStream({ model, contents });
-
-                let fullText = '';
-                let isFirst = true;
-                for await (const chunk of response) {
-                    const chunkText = chunk.text;
-                    if (chunkText) {
-                        fullText += chunkText;
-                        hasStreamedText = true;
-                        // Send to renderer - new response for first chunk, update for subsequent
-                        sendToRenderer(isFirst ? 'new-response' : 'update-response', fullText);
-                        isFirst = false;
-                    }
-                }
-
-                incrementLimitCount(model);
-                console.log(`Image response completed from ${model}`);
-
-                if (model !== preferred) {
-                    sendToRenderer('update-status', `Answered by ${model}`);
-                }
-
-                saveScreenAnalysis(prompt, fullText, model);
-
-                return { success: true, text: fullText, model: model };
-            } catch (error) {
-                lastError = error.message || String(error);
-                console.error(`Image request failed on ${model}:`, lastError);
-
-                // Text already on screen came from this attempt; retrying would duplicate it
-                if (hasStreamedText) {
-                    return { success: false, error: lastError };
-                }
-
-                if (isQuotaError(error)) {
-                    sawQuotaError = true;
-                } else if (!isRetryableModelError(error)) {
-                    return { success: false, error: lastError };
-                }
-
-                sendToRenderer('update-status', `${model} unavailable, trying another model...`);
+        // Stream the response
+        let fullText = '';
+        let isFirst = true;
+        for await (const chunk of response) {
+            const chunkText = chunk.text;
+            if (chunkText) {
+                fullText += chunkText;
+                // Send to renderer - new response for first chunk, update for subsequent
+                sendToRenderer(isFirst ? 'new-response' : 'update-response', fullText);
+                isFirst = false;
             }
         }
 
-        // Every model refused. If that was quota, another stored key may still have some.
-        if (!sawQuotaError || keyCount < 2 || typeof cycleActiveKey !== 'function') break;
+        console.log(`Image response completed from ${model}`);
 
-        const nextIndex = cycleActiveKey();
-        console.log(`Quota exhausted on this key, switching to slot ${nextIndex + 1}`);
-        sendToRenderer('update-status', `Quota reached, switched to key ${nextIndex + 1}`);
+        // Save screen analysis to history
+        saveScreenAnalysis(prompt, fullText, model);
+
+        return { success: true, text: fullText, model: model };
+    } catch (error) {
+        console.error('Error sending image to Gemini HTTP:', error);
+        return { success: false, error: error.message };
     }
-
-    return { success: false, error: lastError };
 }
 
 function setupGeminiIpcHandlers(geminiSessionRef) {

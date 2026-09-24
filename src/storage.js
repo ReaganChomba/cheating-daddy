@@ -20,6 +20,8 @@ const DEFAULT_CREDENTIALS = {
     groqApiKey: '',
     geminiKeys: [],
     activeKeyIndex: 0,
+    groqKeys: [],
+    activeGroqKeyIndex: 0,
 };
 
 const DEFAULT_PREFERENCES = {
@@ -268,12 +270,90 @@ function setApiKey(apiKey) {
     return setCredentials({ geminiKeys: slots, activeKeyIndex: index, apiKey });
 }
 
+// Groq uses its own key-slot pool. This is deliberately separate from Gemini
+// so changing/rotating Groq keys can never alter the Gemini Live session key.
+function getGroqKeys() {
+    const credentials = getCredentials();
+    const slots = Array.isArray(credentials.groqKeys)
+        ? credentials.groqKeys.filter(slot => slot && typeof slot.key === 'string')
+        : [];
+
+    // Migrate the legacy single Groq key into the first slot.
+    if (slots.length === 0 && credentials.groqApiKey) {
+        return [{ label: 'Key 1', key: credentials.groqApiKey }];
+    }
+
+    return slots;
+}
+
+function getActiveGroqKeyIndex() {
+    const slots = getGroqKeys();
+    if (slots.length === 0) return 0;
+
+    const index = getCredentials().activeGroqKeyIndex;
+    return Number.isInteger(index) && index >= 0 && index < slots.length ? index : 0;
+}
+
+function setGroqKeys(keys) {
+    const slots = (Array.isArray(keys) ? keys : []).map((slot, i) => ({
+        label: (slot && slot.label) || `Key ${i + 1}`,
+        key: (slot && slot.key) || '',
+    }));
+    const index = slots.length === 0 ? 0 : Math.min(getActiveGroqKeyIndex(), slots.length - 1);
+
+    return setCredentials({
+        groqKeys: slots,
+        activeGroqKeyIndex: index,
+        groqApiKey: slots[index] ? slots[index].key : '',
+    });
+}
+
+function setActiveGroqKeyIndex(index) {
+    const slots = getGroqKeys();
+    if (slots.length === 0) return false;
+
+    const active = Number.isInteger(index) && index >= 0 && index < slots.length ? index : 0;
+    return setCredentials({
+        groqKeys: slots,
+        activeGroqKeyIndex: active,
+        groqApiKey: slots[active].key,
+    });
+}
+
+function cycleActiveGroqKey() {
+    const slots = getGroqKeys();
+    if (slots.length < 2) return getActiveGroqKeyIndex();
+
+    const next = (getActiveGroqKeyIndex() + 1) % slots.length;
+    setActiveGroqKeyIndex(next);
+    return next;
+}
+
 function getGroqApiKey() {
+    const slots = getGroqKeys();
+    const active = slots[getActiveGroqKeyIndex()];
+    if (active && active.key) return active.key;
+
     return getCredentials().groqApiKey || '';
 }
 
 function setGroqApiKey(groqApiKey) {
-    return setCredentials({ groqApiKey });
+    const slots = getGroqKeys();
+    if (slots.length === 0) {
+        return setCredentials({
+            groqKeys: [{ label: 'Key 1', key: groqApiKey }],
+            activeGroqKeyIndex: 0,
+            groqApiKey,
+        });
+    }
+
+    const index = getActiveGroqKeyIndex();
+    slots[index] = { ...slots[index], key: groqApiKey };
+    return setCredentials({
+        groqKeys: slots,
+        activeGroqKeyIndex: index,
+        groqApiKey,
+    });
 }
 
 // ============ PREFERENCES ============
@@ -585,6 +665,11 @@ module.exports = {
     cycleActiveKey,
     getGroqApiKey,
     setGroqApiKey,
+    getGroqKeys,
+    setGroqKeys,
+    getActiveGroqKeyIndex,
+    setActiveGroqKeyIndex,
+    cycleActiveGroqKey,
 
     // Preferences
     getPreferences,

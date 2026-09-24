@@ -735,6 +735,8 @@ export class MainView extends LitElement {
         _geminiKeys: { state: true },
         _activeKeyIndex: { state: true },
         _groqKey: { state: true },
+        _groqKeys: { state: true },
+        _activeGroqKeyIndex: { state: true },
         _openaiKey: { state: true },
         _geminiLiveModel: { state: true },
         _groqModel: { state: true },
@@ -766,6 +768,8 @@ export class MainView extends LitElement {
         this._geminiKeys = [];
         this._activeKeyIndex = 0;
         this._groqKey = '';
+        this._groqKeys = [];
+        this._activeGroqKeyIndex = 0;
         this._openaiKey = '';
         this._geminiLiveModel = 'gemini-3.1-flash-live-preview';
         this._groqModel = 'qwen/qwen3.6-27b';
@@ -810,7 +814,11 @@ export class MainView extends LitElement {
             this._geminiKeys = geminiKeys.keys || [];
             this._activeKeyIndex = geminiKeys.activeIndex || 0;
 
-            this._groqKey = (await cheatingDaddy.storage.getGroqApiKey().catch(() => '')) || '';
+            const groqKeys = await cheatingDaddy.storage.getGroqKeys().catch(() => ({ keys: [], activeIndex: 0 }));
+            this._groqKeys = groqKeys.keys || [];
+            this._activeGroqKeyIndex = groqKeys.activeIndex || 0;
+            const activeGroqKey = this._groqKeys[this._activeGroqKeyIndex];
+            this._groqKey = activeGroqKey ? activeGroqKey.key : ((await cheatingDaddy.storage.getGroqApiKey().catch(() => '')) || '');
             this._openaiKey = creds.openaiKey || '';
             this._geminiLiveModel = config.geminiLiveModel || 'gemini-3.1-flash-live-preview';
             this._groqModel = config.groqModel || 'qwen/qwen3.6-27b';
@@ -1018,10 +1026,48 @@ export class MainView extends LitElement {
         this._applyKeyState(await cheatingDaddy.storage.setActiveKeyIndex(index));
     }
 
+    _applyGroqKeyState(state) {
+        this._groqKeys = state.keys || [];
+        this._activeGroqKeyIndex = state.activeIndex || 0;
+        const active = this._groqKeys[this._activeGroqKeyIndex];
+        this._groqKey = active ? active.key : '';
+        this.requestUpdate();
+    }
+
     async _saveGroqKey(val) {
         this._groqKey = val;
-        await cheatingDaddy.storage.setGroqApiKey(val);
-        this.requestUpdate();
+        if (this._groqKeys.length) {
+            const slots = this._groqKeys.map((slot, i) => (i === this._activeGroqKeyIndex ? { ...slot, key: val } : slot));
+            this._applyGroqKeyState(await cheatingDaddy.storage.setGroqKeys(slots));
+        } else {
+            await cheatingDaddy.storage.setGroqApiKey(val);
+            this.requestUpdate();
+        }
+    }
+
+    async _saveGroqKeySlot(index, val) {
+        const slots = this._groqKeys.map((slot, i) => (i === index ? { ...slot, key: val } : slot));
+        this._applyGroqKeyState(await cheatingDaddy.storage.setGroqKeys(slots));
+    }
+
+    async _saveGroqKeyLabel(index, val) {
+        const slots = this._groqKeys.map((slot, i) => (i === index ? { ...slot, label: val } : slot));
+        this._applyGroqKeyState(await cheatingDaddy.storage.setGroqKeys(slots));
+    }
+
+    async _addGroqKey() {
+        const slots = [...this._groqKeys, { label: `Key ${this._groqKeys.length + 1}`, key: '' }];
+        const state = await cheatingDaddy.storage.setGroqKeys(slots);
+        this._applyGroqKeyState(await cheatingDaddy.storage.setActiveGroqKeyIndex(state.keys.length - 1));
+    }
+
+    async _removeGroqKey(index) {
+        const slots = this._groqKeys.filter((_, i) => i !== index);
+        this._applyGroqKeyState(await cheatingDaddy.storage.setGroqKeys(slots));
+    }
+
+    async _selectGroqKey(index) {
+        this._applyGroqKeyState(await cheatingDaddy.storage.setActiveGroqKeyIndex(index));
     }
 
     async _saveGeminiLiveModel(val) {
@@ -1315,10 +1361,52 @@ export class MainView extends LitElement {
                 <div class="config-content">
                     <div class="form-group">
                         <label class="form-label">Groq API Key</label>
-                        <input type="password" placeholder="Optional" .value=${this._groqKey} @input=${e => this._saveGroqKey(e.target.value)} />
-                        <div class="form-hint">
+                        ${this._groqKeys.length > 1
+                            ? html`
+                                  <div class="key-switcher">
+                                      ${this._groqKeys.map(
+                                          (slot, i) => html`
+                                              <button
+                                                  class="key-chip ${i === this._activeGroqKeyIndex ? 'active' : ''} ${slot.key ? '' : 'empty'}"
+                                                  title=${slot.key ? 'Use this key' : 'Empty slot'}
+                                                  @click=${() => this._selectGroqKey(i)}
+                                              >
+                                                  ${slot.label || `Key ${i + 1}`}
+                                              </button>
+                                          `
+                                      )}
+                                  </div>
+                              `
+                            : ''}
+                        <input
+                            type="password"
+                            placeholder="Optional"
+                            .value=${this._groqKey}
+                            @input=${e =>
+                                this._groqKeys.length
+                                    ? this._saveGroqKeySlot(this._activeGroqKeyIndex, e.target.value)
+                                    : this._saveGroqKey(e.target.value)}
+                        />
+                        ${this._groqKeys.length > 1
+                            ? html`
+                                  <input
+                                      type="text"
+                                      placeholder="Name this key"
+                                      .value=${(this._groqKeys[this._activeGroqKeyIndex] || {}).label || ''}
+                                      @input=${e => this._saveGroqKeyLabel(this._activeGroqKeyIndex, e.target.value)}
+                                  />
+                              `
+                            : ''}
+                        <div class="form-hint key-hint-row">
                             <span class="link" @click=${() => this.onExternalLink('https://console.groq.com/keys')}>Get Groq key</span>
+                            <span class="link" @click=${() => this._addGroqKey()}>Add another key</span>
+                            ${this._groqKeys.length > 1
+                                ? html`<span class="link" @click=${() => this._removeGroqKey(this._activeGroqKeyIndex)}>Remove this key</span>`
+                                : ''}
                         </div>
+                        ${this._groqKeys.length > 1
+                            ? html`<div class="form-hint">Failed/rate-limited Groq requests automatically try another configured key.</div>`
+                            : ''}
                     </div>
 
                     <div class="form-group">
